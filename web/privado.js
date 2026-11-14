@@ -72,7 +72,7 @@ VIEWS.privado = async (el) => {
     const f = $("#pv-filter", el)?.value || "";
     const list = !f ? all : all.filter((e) => f === "pending" ? e.status === "done" && !e.review : e.review === f);
     g.innerHTML = list.length ? list.map((e) => `<div class="pv-item">${e.status === "done"
-      ? `<img src="/api/privado/imagen/${esc(e.id)}" loading="lazy" data-pvzoom="${esc(e.id)}">`
+      ? `<img src="/api/privado/imagen/${esc(e.id)}?t=1" loading="lazy" decoding="async" data-pvzoom="${esc(e.id)}">`
       : `<div class="pv-ph">${e.status === "failed" ? `⚠ ${esc(e.error || "falló")}` : `<div><div class="spinner"></div>${e.status === "waiting" ? esc(e.note || "Esperando la GPU…") : e.status === "queued" ? esc(e.note || "En fila…") : "Generando…"}</div>`}</div>`}
       ${e.status === "done" ? `<div class="row small" style="gap:6px;margin-top:6px">
         ${e.review === "approved" ? '<span class="chip good">✔ Aprobada</span>' : e.review === "rejected" ? '<span class="chip bad">✖ Rechazada</span>' : '<span class="chip">Por revisar</span>'}
@@ -83,7 +83,7 @@ VIEWS.privado = async (el) => {
       ${e.status === "done" ? `<a class="btn sm ghost" href="/api/privado/imagen/${esc(e.id)}" download="privado-${esc(e.id)}.png">${icon("download", 13)}</a>` : ""}
       ${e.status === "done" && e.subject_id ? `<button class="btn sm ghost" data-pvtoref="${esc(e.id)}" data-pvsid="${esc(e.subject_id)}" title="Guardarla en sus fotos privadas (Banco)">➕</button>` : ""}
       <button class="btn sm ghost" data-pvdel="${esc(e.id)}">${icon("trash", 13)}</button></div></div>`).join("") : `<div class="faint small" style="padding:10px 0">Todavía no hay imágenes.</div>`;
-    $$("[data-pvzoom]", g).forEach((im) => im.onclick = () => window.open(im.src, "_blank"));
+    $$("[data-pvzoom]", g).forEach((im) => im.onclick = () => window.open(`/api/privado/imagen/${im.dataset.pvzoom}`, "_blank"));
     $$("[data-pvrev]", g).forEach((b) => b.onclick = async () => {
       const ok = b.dataset.ok === "1" ? true : b.dataset.ok === "0" ? false : null;
       try { await api(`/api/privado/imagen/${b.dataset.pvrev}/revisar`, { method: "POST", body: { ok } }); refresh(); }
@@ -221,7 +221,7 @@ async function privateDialog(sid, name) {
     <div class="pv-grid">${d.refs.map((f) => `<div class="pv-item"><img src="/api/privado/ref/${esc(f)}" loading="lazy">
       <button class="btn sm ghost" data-pvrm="${esc(f)}">Quitar</button></div>`).join("") || '<div class="faint small">Todavía no tiene. Súbelas o agrégalas desde lo generado abajo.</div>'}</div>
     <b style="margin-top:10px">Generadas en Shelton Hot (${d.generated.length})</b>
-    <div class="pv-grid">${d.generated.map((e) => `<div class="pv-item"><img src="/api/privado/imagen/${esc(e.id)}" loading="lazy">
+    <div class="pv-grid">${d.generated.map((e) => `<div class="pv-item"><img src="/api/privado/imagen/${esc(e.id)}?t=1" loading="lazy" decoding="async">
       ${d.refs.includes(e.file) ? '<span class="chip good">En sus fotos</span>' : `<button class="btn sm" data-pvadd="${esc(e.id)}">➕ A sus fotos</button>`}</div>`).join("") || '<div class="faint small">Todavía no hay. Pídelas en Shelton Hot nombrándola.</div>'}</div>`
     : `<div class="card pv-rules">Primero confirma en <b>Shelton Hot</b> (Opciones avanzadas) que <b>${esc(name)}</b> es una modelo <b>inventada y mayor de 18</b>.</div>`,
     `<button class="btn ghost" onclick="closeModal()">Cerrar</button>`, true);

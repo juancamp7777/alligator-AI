@@ -239,7 +239,7 @@ def config_dict(name: str, root: str, trigger: str, steps: int, profile: str = "
     base: zimage (por defecto, la de siempre), sdxl o flux (las «versiones» de un modelo para esos motores)."""
     pf = PROFILES.get(profile, PROFILES["estandar"])
     model, train_extra, sample = _arch_parts(base, pf, trigger)
-    return {"job": "extension", "config": {"name": name, "process": [{
+    cfg = {"job": "extension", "config": {"name": name, "process": [{
         "type": "sd_trainer", "training_folder": f"{root}/output", "device": "cuda:0", "trigger_word": trigger,
         "network": {"type": "lora", "linear": pf["rank"], "linear_alpha": pf["rank"]},
         "save": {"dtype": "float16", "save_every": 500, "max_step_saves_to_keep": pf["keep"]},
@@ -251,6 +251,12 @@ def config_dict(name: str, root: str, trigger: str, steps: int, profile: str = "
         "model": model,
         "sample": sample,
     }]}, "meta": {"name": name, "version": "1.0", "base": base}}
+    try:   # 📸 una muestra numerada cada 100 pasos (y un punto guardado en cada una para poder elegirla)
+        from app import lora_muestras
+        lora_muestras.apply_to_config(cfg["config"]["process"][0])
+    except Exception:  # noqa: BLE001
+        log.warning("No pude activar las muestras del entrenamiento", exc_info=True)
+    return cfg
 
 
 def _config(name: str, work: Path, trigger: str, steps: int, profile: str = "estandar", base: str = "zimage") -> Path:
@@ -663,6 +669,7 @@ async def _follow(subject_id: str, state: dict, steps: int) -> tuple[int | None,
     logf, rcf = Path(state["log"]), Path(state["rc"])
     pos = int(state.get("offset") or 0)
     last_pub, tail, phase = 0.0, [], ""
+    last_samples = 0.0
     first_seen: tuple[int, float] | None = None   # (paso, hora) del primer paso visto en esta conexión
     spp_now = None
     buf = b""
@@ -717,6 +724,9 @@ async def _follow(subject_id: str, state: dict, steps: int) -> tuple[int | None,
                                   **({"sec_per_step": round(spp_now, 3)} if spp_now else {})})
                     last_pub = now_t
         catching_up = False
+        if time.time() - last_samples > 20:
+            last_samples = time.time()
+            await _collect_samples(subject_id)
         if rcf.exists():
             try:
                 return int(rcf.read_text().strip() or 1), tail, spp_now
@@ -732,11 +742,21 @@ async def _follow(subject_id: str, state: dict, steps: int) -> tuple[int | None,
         await asyncio.sleep(LOG_POLL)
 
 
+async def _collect_samples(subject_id: str, extra_dirs: list | None = None) -> None:
+    """📸 Numera y guarda las muestras nuevas del entrenamiento (nunca frena ni corta el entrenamiento)."""
+    try:
+        from app import lora_muestras
+        await asyncio.to_thread(lora_muestras.collect, subject_id, extra_dirs)
+    except Exception:  # noqa: BLE001
+        log.warning("No pude leer las muestras del entrenamiento", exc_info=True)
+
+
 async def _finish(subject_id: str, ctx: dict, steps: int, final: Path | None, t0: float, spp_now: float | None,
                   provider: str = "ai-toolkit", cost_usd: float | None = None, where: str = "") -> None:
     """Todo lo que se hace al terminar (igual en la placa que en una tarjeta alquilada): dejarla activa, respaldo,
     fotos estudiadas, consumo y aviso. Además la copia a las demás tarjetas que generan."""
     work, job_name, name_human, base, n = ctx["work"], ctx["job"], ctx["name"], ctx["base"], ctx["n"]
+    await _collect_samples(subject_id)
     if not final:
         _update(subject_id, lora_status="failed", info={"error": "El entrenamiento terminó pero no encontré la LoRA", "phase": ""})
         return
