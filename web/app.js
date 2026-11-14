@@ -425,12 +425,39 @@ function thumbs(ids) {
   ["mousemove", "keydown", "click", "touchstart", "scroll"].forEach((e) => window.addEventListener(e, ping, { passive: true }));
 })();
 
+// Campaña en vivo dentro del chat: cuántas van, en cola y generándose, con acceso directo a la Galería
+function campaignLive(ev) {
+  const d = document.createElement("div");
+  d.className = "card"; d.style.cssText = "margin:8px 0;padding:12px 14px";
+  const paint = (c) => {
+    const k = c?.counts || {}, done = (k.ready || 0) + (k.approved || 0) + (k.published || 0), failed = k.failed || 0;
+    const working = (k.generating || 0) + (k.running || 0), queued = k.queued || 0, total = c?.count || ev.count;
+    const pct = Math.min(100, Math.round((done / Math.max(1, total)) * 100));
+    d.innerHTML = `<div class="row" style="gap:8px;flex-wrap:wrap"><b>🚀 Campaña de ${total} fotos</b><span class="faint small grow">${c?.status === "planning" ? "El Planificador está pensando las ideas…" : c?.status === "failed" ? "Falló: " + esc(c.error || "") : `${done} listas · ${working} generándose · ${queued} en cola${failed ? ` · ${failed} fallidas` : ""}`}</span>
+      <button class="btn sm" onclick="go('galeria','${esc(ev.id)}')">Ver en Galería</button><button class="btn sm ghost" onclick="go('campanas')">Campañas</button></div>
+      <div class="hbar" style="grid-template-columns:1fr 50px;margin:8px 0 0"><div class="track"><i style="width:${pct}%"></i></div><b>${pct}%</b></div>`;
+    return done + failed >= total || c?.status === "failed";
+  };
+  paint(null);
+  const tick = async () => {
+    if (!document.body.contains(d)) return;
+    let list; try { list = await api("/api/campaigns"); } catch { return setTimeout(tick, 8000); }
+    if (!paint(list.find((c) => c.id === ev.id))) setTimeout(tick, 6000);
+  };
+  setTimeout(tick, 1500);
+  return d;
+}
+
 // Banner de color: «No te puedo hacer esto porque falta encender X» + botón para encenderlo y reintentar
 function needAgentBanner(ev) {
   const d = document.createElement("div");
-  d.className = "need-agent"; d.dataset.needag = ev.key;
+  d.className = "need-agent"; d.dataset.needag = ev.key; if (ev.optional) d.dataset.opt = "1";
   d.style.cssText = `border:1px solid ${ev.color};background:${ev.color}22;border-radius:12px;padding:10px 14px;margin:8px 0;display:flex;gap:10px;align-items:center;flex-wrap:wrap`;
-  d.innerHTML = `<span style="font-size:20px">⚠️</span><div class="grow"><b>No te puedo hacer esto porque falta encender: ${esc(ev.name)}</b>
+  d.innerHTML = ev.optional
+    ? `<span style="font-size:20px">🟠</span><div class="grow"><b>Esto sale sin el ${esc(ev.name)}: está apagado</b>
+      <div class="faint small">${esc(ev.role || "")}. Si lo enciendes, lo próximo ya lo usa.</div></div>
+      <button class="btn sm primary">Encender</button><button class="btn sm ghost">Ahora no</button>`
+    : `<span style="font-size:20px">⚠️</span><div class="grow"><b>No te puedo hacer esto porque falta encender: ${esc(ev.name)}</b>
     <div class="faint small">${esc(ev.role || "")}</div></div>
     <button class="btn sm primary">Encender y seguir</button><button class="btn sm ghost">Ahora no</button>`;
   const [on, no] = $$("button", d);
@@ -444,6 +471,7 @@ function needAgentBanner(ev) {
     }
     try { await api(`/api/agents/${ev.key}`, { method: "PUT", body: { enabled: true } }); }
     catch (e) { on.disabled = false; return toast(esc(e.message), "bad"); }
+    if (ev.optional) { d.innerHTML = `<span>✅</span><b>${esc(ev.name)} encendido.</b> <span class="faint small">Lo próximo ya lo usa.</span>`; return; }
     d.innerHTML = `<span>✅</span><b>${esc(ev.name)} encendido.</b> <span class="faint small">Sigo con tu pedido…</span>`;
     if (input && !S.busy) { input.value = `Listo, ya encendí el ${ev.name}. Sigue con lo que te pedí.`; sendMessage(); }
   };
@@ -484,7 +512,8 @@ async function sendMessage() {
         else if (ev.type === "subjects_changed") step("Banco de modelos actualizado");
         else if (ev.type === "message") { const b = document.createElement("div"); b.className = "bubble"; b.textContent = ev.text || "(sin respuesta)"; body.insertBefore(b, steps.nextSibling); const rest = ev.post_ids.filter((x) => !shown.has(x)); if (rest.length) body.append(thumbs(rest)); }
         else if (ev.type === "error") { const b = document.createElement("div"); b.className = "bubble"; b.style.borderColor = "var(--bad)"; b.textContent = "⚠ " + ev.text; body.append(b); }
-        else if (ev.type === "need_agent" && !$(`[data-needag="${ev.key}"]`, body)) body.append(needAgentBanner(ev));
+        else if (ev.type === "need_agent") { const old = $(`[data-needag="${ev.key}"]`, body); if (!old) body.append(needAgentBanner(ev)); else if (!ev.optional && old.dataset.opt) old.replaceWith(needAgentBanner(ev)); }
+        else if (ev.type === "campaign_live") body.append(campaignLive(ev));
       }
     }
   } catch (err) { step("⚠ " + err.message); }

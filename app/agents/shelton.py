@@ -396,6 +396,30 @@ def agent_off_in(text: str) -> str | None:
     return None
 
 
+# Qué subagentes usa cada herramienta (los que, si están apagados, hacen que el resultado salga más simple)
+TOOL_AGENTS = {
+    "create_posts": ["art_director", "judge", "copywriter"],
+    "create_campaign": ["art_director", "judge", "copywriter"],
+    "edit_post": ["edit_director", "judge"],
+    "create_reel": ["art_director", "judge", "video_producer", "copywriter"],
+    "make_video": ["video_producer", "judge"],
+    "recreate_reference": ["art_director", "video_producer", "judge"],
+    "add_voice": ["voice_director"],
+    "add_sound": ["sound_designer"],
+    "create_subject_from_photos": ["subject_analyst"],
+    "add_subject_reference": ["subject_analyst"],
+}
+
+
+async def _warn_off_agents(tool: str, emit) -> None:
+    """Antes de una tarea: si algún subagente que usa está apagado, banner «sale sin X · Encender»."""
+    for key in TOOL_AGENTS.get(tool, []):
+        if not registry.is_on(key):
+            a = registry.AGENTS[key]
+            await emit({"type": "need_agent", "key": key, "name": a["name"], "color": a.get("color", "#f59e0b"),
+                        "role": a.get("role", ""), "optional": True})
+
+
 async def _need_agent(text: str, emit) -> None:
     """Banner en el chat: «No te puedo hacer esto porque falta encender X», con botón Encender."""
     key = agent_off_in(text)
@@ -455,6 +479,7 @@ async def _run_tool(name: str, args: dict, ctx: dict, emit) -> list | str:
         cid = pipeline.new_campaign(args["brief"], args["count"], args.get("platforms"), sids, engine,
                                     planner_temp=temp)
         await emit({"type": "status", "text": f"Campaña de {args['count']} posts planificándose…"})
+        await emit({"type": "campaign_live", "id": cid, "count": args["count"]})
         st = await pipeline.campaign_first_result(cid)
         if st["status"] == "failed":
             return json.dumps({"ok": False, "launched": False, "campaign_id": cid, "error": st["error"],
@@ -941,6 +966,7 @@ async def _turn(conv_id, user_text, upload_post_ids, emit, agent, engine, attach
         results = []
         for u in uses:
             try:
+                await _warn_off_agents(u.name, emit)
                 out = await _run_tool(u.name, dict(u.input or {}), ctx, emit)
                 results.append({"type": "tool_result", "tool_use_id": u.id, "content": out})
                 if isinstance(out, str):
