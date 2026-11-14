@@ -51,6 +51,9 @@
   .buddy { bottom: 150px !important; right: 8px !important; }
   .b-face { width: 50px !important; height: 50px !important; border-radius: 16px !important; }
   .buddy > *:not(.b-face) { max-width: 82vw; }
+  /* Su panel entra entero en la pantalla: la ✕ de arriba siempre se ve (antes quedaba fuera, arriba) */
+  .b-panel { max-height: calc(100dvh - 240px) !important; width: calc(100vw - 20px) !important; }
+  .b-head #b-x { width: 44px; height: 44px; background: var(--panel-3); border-color: var(--line-2); }
 
   /* Cabecera del chat (agente, motor, modelos, ajustes): una fila que se desliza con el dedo */
   .chat-head { height: 54px; gap: 8px; padding: 0 10px; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }

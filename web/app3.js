@@ -216,6 +216,11 @@ const Bot = window.Bot = {
     w.innerHTML = `<div class="b-bubble hidden" id="b-bubble"></div><button class="b-face" id="b-face" title="Shelton mini: tócame, dime lo que quieres y lo hago mientras sale lo demás">${BOT_SVG}<span class="b-badge hidden" id="b-badge"></span></button>`;
     document.body.append(w);
     $("#b-face").onclick = () => this.toggle();
+    // 📱 En el celular: tocar fuera del panel lo cierra (en la PC no cambia nada)
+    document.addEventListener("pointerdown", (e) => {
+      if (!this.open || !window.matchMedia("(max-width: 860px)").matches) return;
+      if (!e.target.closest("#buddy")) this.toggle(false);
+    }, true);
     document.addEventListener("mousemove", (e) => this.look(e.clientX, e.clientY));
     setInterval(() => this.blink(), 3800);
     this.refresh(); setInterval(() => this.refresh(), 20000);
