@@ -170,3 +170,26 @@ def test_banner_when_a_needed_agent_is_off():
     finally:
         _on("planner")
     assert shelton.agent_off_in("El Planificador está apagado") is None      # ya encendido: no molesta
+
+
+def test_big_request_is_not_split_in_batches_when_planner_is_off(monkeypatch):
+    """«Hazme 30 fotos» con el Planificador apagado: no las parte en tandas de 6; se frena y pregunta."""
+    from app.agents import shelton
+    assert shelton.asked_count("hazme 30 fotos de Valentina en la cama") == 30
+    assert shelton.asked_count("una foto de Valentina") == 0
+    _off("planner")
+    try:
+        made = []
+        monkeypatch.setattr(pipeline, "new_post", lambda *a, **k: made.append(1) or "x")
+        posts = [{"idea": f"escena {i}"} for i in range(6)]
+
+        async def emit(ev):
+            pass
+        out = asyncio.run(shelton._run_tool("create_posts", {"posts": posts}, {"conv_id": None, "engine": None,
+                                                                             "asked": 30}, emit))
+        assert "NO se crearon" in out and shelton.agent_off_in(out) == "planner" and not made
+        ctx = {"conv_id": None, "engine": None, "asked": 0, "turn_posts": 6}       # segunda tanda en el mismo turno
+        out = asyncio.run(shelton._run_tool("create_posts", {"posts": posts[:2]}, ctx, emit))
+        assert "NO se crearon" in out and not made
+    finally:
+        _on("planner")
