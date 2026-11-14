@@ -193,3 +193,20 @@ def test_big_request_is_not_split_in_batches_when_planner_is_off(monkeypatch):
         assert "NO se crearon" in out and not made
     finally:
         _on("planner")
+
+
+def test_banner_for_every_needed_agent_that_is_off_and_silence_when_on():
+    """Cualquier subagente que la tarea usa y está apagado → banner. Si están encendidos, no dice nada."""
+    from app.agents import shelton
+    evs = []
+
+    async def emit(ev):
+        evs.append(ev)
+    asyncio.run(shelton._warn_off_agents("create_posts", emit))
+    assert evs == []                                               # todos encendidos: silencio
+    _off("judge", "copywriter")
+    try:
+        asyncio.run(shelton._warn_off_agents("create_posts", emit))
+        assert {e["key"] for e in evs} == {"judge", "copywriter"} and all(e["optional"] for e in evs)
+    finally:
+        _on("judge", "copywriter")
