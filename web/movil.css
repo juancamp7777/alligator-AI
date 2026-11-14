@@ -1,0 +1,61 @@
+/* 📱 Shelton en el celular. Todo va dentro de @media (max-width: 860px): en la PC no cambia nada. */
+@media (max-width: 860px) {
+  /* Nada más ancho que la pantalla: así el navegador no achica toda la página */
+  html, body { overflow-x: hidden; max-width: 100vw; }
+  .main, .view, .card { min-width: 0; }
+  .view img, .view video { max-width: 100%; }
+
+  /* Alto real del celular (sin la barra del navegador): el menú de abajo queda siempre a la vista */
+  .app, .app.wide { height: 100vh; height: 100dvh; }
+  .main { height: calc(100vh - 60px); height: calc(100dvh - 60px); }
+
+  /* Barra de arriba: una sola fila que se desliza con el dedo, sin estirar la página */
+  .topbar { height: 56px; gap: 8px; padding: 0 10px; overflow-x: auto; overflow-y: hidden; scrollbar-width: none;
+            -webkit-overflow-scrolling: touch; }
+  .topbar::-webkit-scrollbar { display: none; }
+  .topbar > * { flex: none; }
+  .topbar > .grow { display: none; }
+  .search { width: 40px; padding: 0; justify-content: center; }
+  .search > span:not(#i-search) { display: none; }
+  .working-pill { height: 36px; padding: 0 10px 0 6px; }
+  .topbar .seg button { padding: 6px 9px; }
+  .topbar .btn.sm { padding: 6px 10px; }
+
+  /* Menú de abajo: íconos parejos, se desliza si no entran todos */
+  .rail { gap: 2px; scrollbar-width: none; }
+  .rail::-webkit-scrollbar { display: none; }
+  .rail > * { flex: none; }
+
+  /* Pestañas y filtros (Todo / En proceso / Para revisar…): se deslizan en vez de salirse */
+  .view .seg { display: flex; max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+  .view .seg::-webkit-scrollbar { display: none; }
+  .view .seg button { flex: none; white-space: nowrap; }
+
+  /* Encabezado de cada página más compacto */
+  .view { padding: 14px 12px 40px; }
+  .page-head, .hero { gap: 10px; }
+
+  /* Ventanas (modales) y panel lateral a pantalla completa */
+  .modal { padding: 0; place-items: end center; }
+  .modal .box, .modal .box.lg { width: 100%; max-width: 100vw; max-height: 92dvh; border-radius: 16px 16px 0 0; }
+  .drawer { width: 100%; height: 100dvh; }
+
+  /* Filas de botones que no entran: bajan a la línea siguiente */
+  .row { flex-wrap: wrap; }
+  .topbar .row, .rail .row { flex-wrap: nowrap; }
+
+  /* Tablas anchas: se deslizan dentro de su tarjeta */
+  .view table { display: block; overflow-x: auto; max-width: 100%; }
+
+  /* Shelton mini (el robot): más chico y por encima de la caja de escribir, para no tapar «Enviar» */
+  .buddy { bottom: 150px !important; right: 8px !important; }
+  .b-face { width: 50px !important; height: 50px !important; border-radius: 16px !important; }
+  .buddy > *:not(.b-face) { max-width: 82vw; }
+
+  /* Cabecera del chat (agente, motor, modelos, ajustes): una fila que se desliza con el dedo */
+  .chat-head { height: 54px; gap: 8px; padding: 0 10px; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
+  .chat-head::-webkit-scrollbar { display: none; }
+  .chat-head > * { flex: none; }
+  .chat-head .grow { display: none; }
+  .chat-head .btn { white-space: nowrap; }
+}
