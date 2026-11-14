@@ -40,7 +40,8 @@ Cómo trabajas:
 - Habla en el idioma del usuario, breve y claro, como un director creativo con criterio. Nada de relleno.
 - Si el pedido es claro, actúa enseguida. Si falta algo esencial (por ejemplo, de qué trata la marca para una
   campaña grande), pregunta una sola vez y propone opciones.
-- Hasta ~6 posts: create_posts. Más que eso o "N diarios": create_campaign (se procesan en cola).
+- Hasta 6 posts: create_posts. Más de 6 (o "N diarios"): SIEMPRE create_campaign (se procesan en cola). Nunca
+  partas un pedido de más de 6 en varias tandas de create_posts, aunque el Planificador esté apagado.
 - Las campañas necesitan al Planificador. Si create_campaign responde que está apagado, NO digas que las fotos se
   están haciendo: dile al usuario que no pudiste porque el Planificador está apagado y pregúntale si lo enciendes
   solo para esta tarea. Si dice que sí, llama otra vez a create_campaign con turn_on_planner=true: se enciende,
@@ -142,7 +143,8 @@ _MODEL_PICK = {
 TOOLS = [
     _tool("models_catalog", "Lista TODOS los modelos de imagen y video disponibles (OpenRouter) con etiquetas de para qué "
           "sirve cada uno y cuál elige el automático. Úsalo para escoger el modelo que más conviene a cada pedido.", {}, []),
-    _tool("create_posts", "Crea de 1 a 6 posts (imagen + texto) y espera el resultado con la nota del juez.",
+    _tool("create_posts", "Crea de 1 a 6 posts (imagen + texto) y espera el resultado con la nota del juez. Solo para "
+          "pedidos de hasta 6 en total: si el usuario pidió más de 6, usa create_campaign (nunca varias tandas de esto).",
           {"posts": {"type": "array", "items": _IDEA, "minItems": 1, "maxItems": 6}, **_MODEL_PICK}, ["posts"]),
     _tool("create_campaign", "Planifica y encola un lote grande de posts distintos (7 a 200). Devuelve al instante; "
           "los posts aparecen en la galería a medida que se terminan.",
@@ -318,7 +320,10 @@ def _paused_line() -> str:
     off = _r.paused()
     return (f" Subagentes APAGADOS por el equipo: {', '.join(off)}. Igual sigues trabajando: cada paso de ellos se hace "
             "simple sin ellos (por ejemplo, sin Juez la foto va directo a Aprobaciones). Si el usuario necesita lo que "
-            "hacía uno de ellos, dile que lo encienda en Agentes." if off else "")
+            "hacía uno de ellos, dile que lo encienda en Agentes."
+            + (" EXCEPCIÓN: con el Planificador apagado, un pedido de MÁS DE 6 fotos NO se hace en tandas de 6: llama a "
+               "create_campaign (te dirá que está apagado) y pregúntale al usuario si lo enciendes para esa campaña."
+               if "Planificador" in off else "") if off else "")
 
 
 def _capacity_line() -> str:
@@ -371,6 +376,15 @@ async def _announce(emit, role: str, engine: str | None = None) -> None:
     await emit({"type": "mode_tag", "text": label})
 
 
+_ASKED = __import__("re").compile(r"\b(\d{1,3})\s*(?:fotos?|im[aá]genes?|posts?|publicaciones?|reels?|videos?)\b",
+                                  __import__("re").IGNORECASE)
+
+
+def asked_count(text: str) -> int:
+    """Cuántas piezas pidió la persona en este mensaje («hazme 30 fotos» → 30). 0 si no dijo un número."""
+    return max((int(m.group(1)) for m in _ASKED.finditer(text or "")), default=0)
+
+
 def agent_off_in(text: str) -> str | None:
     """Si un resultado dice que un subagente está apagado («El Planificador está apagado…»), cuál es."""
     low = (text or "").lower()
@@ -407,6 +421,13 @@ async def _run_tool(name: str, args: dict, ctx: dict, emit) -> list | str:
         await _announce(emit, "voice")
 
     if name == "create_posts":
+        n_new = len(args["posts"][:6])
+        if not registry.is_on("planner") and (ctx.get("asked", 0) > 6 or ctx.get("turn_posts", 0) + n_new > 6):
+            # pedido grande partido en tandas con el Planificador apagado: se frena y se pregunta (no se miente)
+            return ("NO se crearon: el pedido es de más de 6 fotos y el Planificador está apagado. Los pedidos "
+                    "grandes van con create_campaign. Dile al usuario que no puedes hacerlo así porque el Planificador "
+                    "está apagado y pregúntale si lo enciendes para esta campaña (se apaga solo al terminar).")
+        ctx["turn_posts"] = ctx.get("turn_posts", 0) + n_new
         ids = []
         for it in args["posts"][:6]:
             sids, missing = pipeline.find_subjects(it.get("subjects", []))
@@ -863,7 +884,8 @@ async def _turn(conv_id, user_text, upload_post_ids, emit, agent, engine, attach
             conv.engine = engine
         conv_id, agent = conv.id, conv.agent or "shelton"
         messages, display = list(conv.api_messages or []), list(conv.display or [])
-        ctx = {"conv_id": conv_id, "engine": conv.engine or "", "agent": conv.agent or "shelton"}
+        ctx = {"conv_id": conv_id, "engine": conv.engine or "", "agent": conv.agent or "shelton",
+               "asked": asked_count(user_text)}
     await emit({"type": "conversation", "id": conv_id, "agent": agent})
 
     content: list = [{"type": "text", "text": studio_context(ctx["engine"])}]
