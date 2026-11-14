@@ -265,7 +265,7 @@ const Bot = window.Bot = {
     const log = p ? $("#b-log", p).innerHTML : "";
     if (!p) { p = document.createElement("div"); p.className = "b-panel"; p.id = "b-panel"; $("#buddy").append(p); }
     const mins = Math.max(1, Math.round((cap.queue_eta_seconds || 0) / 60));
-    p.innerHTML = `<div class="b-head"><b>Shelton mini</b><span class="chip ${cap.running || cap.pending ? "accent" : "good"}">${cap.running || cap.pending ? `${(cap.running || 0) + (cap.pending || 0)} en marcha · ~${mins} min` : "Libre"}</span><span class="faint small">${cap.parallel_lanes || 1} a la vez</span><div class="grow"></div><button class="icon-btn" id="b-x">${icon("x", 16)}</button></div>
+    p.innerHTML = `<div class="b-grab" id="b-grab" title="Tócala o deslízala hacia abajo para cerrar"><i></i></div><div class="b-head"><b>Shelton mini</b><span class="chip ${cap.running || cap.pending ? "accent" : "good"}">${cap.running || cap.pending ? `${(cap.running || 0) + (cap.pending || 0)} en marcha · ~${mins} min` : "Libre"}</span><span class="faint small">${cap.parallel_lanes || 1} a la vez</span><div class="grow"></div><button class="icon-btn" id="b-x">${icon("x", 16)}</button></div>
       <div id="b-live">${this.liveHTML()}</div>
       <div class="b-greet ${log ? "short" : ""}">👋 Soy <b>Shelton mini</b>. ¿Cómo usamos mejor el tiempo? <b>Escríbeme o háblame</b> (🎙️): dime qué modelo quieres usar, lo buscamos y hacemos contenido mientras sale todo lo demás. Puedes pedirme varias cosas seguidas: las hago en paralelo.</div>
       ${(d.tips || []).length ? `<div class="b-tips">${d.tips.slice(0, log ? 2 : 4).map((t, i) => `<button class="b-tip" data-tip="${i}">${esc(t.text)}</button>`).join("")}</div>` : ""}
@@ -275,6 +275,18 @@ const Bot = window.Bot = {
       <form class="b-input" id="b-form"><button type="button" class="b-mic" id="b-mic" title="Háblame">${icon("mic", 22)}</button><input id="b-text" placeholder="«Abre a Valentina y hazle 3 fotos en la playa»" autocomplete="off"><button class="btn primary sm">${icon("send", 15)}</button></form>
       <div class="row small" style="gap:8px"><button class="btn ghost sm" id="b-new">Otro chat en paralelo</button><button class="btn ghost sm" id="b-open">Ver esta conversación</button><div class="grow"></div><label class="faint"><input type="checkbox" id="b-say" ${localStorage.getItem("buddySay") !== "0" ? "checked" : ""}> Responder en voz</label></div>`;
     $("#b-x", p).onclick = () => this.toggle(false);
+    // 📱 Pestañita: tocarla o deslizarla hacia abajo cierra el panel (solo se ve en el celular)
+    const grab = $("#b-grab", p);
+    grab.onclick = () => this.toggle(false);
+    let y0 = null;
+    grab.addEventListener("touchstart", (e) => { y0 = e.touches[0].clientY; p.style.transition = "none"; }, { passive: true });
+    grab.addEventListener("touchmove", (e) => { if (y0 === null) return; const dy = Math.max(0, e.touches[0].clientY - y0); p.style.transform = `translateY(${dy}px)`; p.style.opacity = String(Math.max(.4, 1 - dy / 300)); }, { passive: true });
+    grab.addEventListener("touchend", (e) => {
+      const dy = y0 === null ? 0 : e.changedTouches[0].clientY - y0; y0 = null;
+      p.style.transition = "transform .18s, opacity .18s";
+      if (dy > 60) { p.style.transform = "translateY(100%)"; p.style.opacity = "0"; setTimeout(() => this.toggle(false), 170); }
+      else { p.style.transform = ""; p.style.opacity = ""; }
+    });
     if ($("#b-review", p)) $("#b-review", p).onclick = async () => { await api("/api/network-review", { method: "POST" }); toast("Shelton mini y los scouts salieron a revisar la red. Te aviso cuando terminen.", "", "🌐"); };
     $$("[data-tip]", p).forEach((b) => b.onclick = () => {
       const t = d.tips[+b.dataset.tip];

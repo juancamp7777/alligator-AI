@@ -1,3 +1,6 @@
+/* La pestañita del panel de Shelton mini existe en el HTML pero solo se muestra en el celular. */
+.b-grab { display: none; }
+
 /* 📱 Shelton en el celular. Todo va dentro de @media (max-width: 860px): en la PC no cambia nada. */
 @media (max-width: 860px) {
   /* Nada más ancho que la pantalla: así el navegador no achica toda la página */
@@ -53,7 +56,13 @@
   .buddy > *:not(.b-face) { max-width: 82vw; }
   /* Su panel entra entero en la pantalla: la ✕ de arriba siempre se ve (antes quedaba fuera, arriba) */
   .b-panel { max-height: calc(100dvh - 240px) !important; width: calc(100vw - 20px) !important; }
-  .b-head #b-x { width: 44px; height: 44px; background: var(--panel-3); border-color: var(--line-2); }
+  /* En vez de la ✕: una pestañita arriba (tocar o deslizar hacia abajo para cerrar) */
+  .b-head #b-x { display: none; }
+  .b-grab { display: flex !important; justify-content: center; align-items: center; height: 26px; margin: -10px -14px -4px;
+            cursor: grab; touch-action: none; position: sticky; top: -14px; z-index: 3; }
+  .b-grab i { width: 46px; height: 5px; border-radius: 99px; background: linear-gradient(90deg, var(--accent), #22d3ee);
+              box-shadow: 0 0 12px var(--accent-glow); opacity: .9; transition: width .15s; }
+  .b-grab:active i { width: 64px; }
 
   /* Cabecera del chat (agente, motor, modelos, ajustes): una fila que se desliza con el dedo */
   .chat-head { height: 54px; gap: 8px; padding: 0 10px; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
