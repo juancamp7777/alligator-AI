@@ -41,6 +41,8 @@ async def lifespan(_: FastAPI):
     from app import traductor
     translator_setup = asyncio.create_task(traductor.prepare())     # baja el traductor la primera vez
     gpu_meter = asyncio.create_task(consumo.sample_loop())
+    from app import inactividad
+    idle_trainer = asyncio.create_task(inactividad.loop())     # 🌙 entrena sola cuando no hay nadie
 
     async def _engine_check():
         # en segundo plano: si la placa está ocupada (entrenando) o ComfyUI tarda, Shelton abre igual al instante
@@ -61,6 +63,7 @@ async def lifespan(_: FastAPI):
     learning.cancel()
     network.cancel()
     gpu_meter.cancel()
+    idle_trainer.cancel()
     translator_setup.cancel()
     engine_check.cancel()
     await pipeline.stop_workers()
@@ -78,9 +81,13 @@ app.include_router(consumo_router)
 from app.calidad import router as calidad_router  # noqa: E402
 from app.granja import router as granja_router  # noqa: E402
 from app.lora_compare import router as compare_router  # noqa: E402
+from app.lora_muestras import router as muestras_router  # noqa: E402
+from app.inactividad import router as idle_router  # noqa: E402
 app.include_router(calidad_router)
 app.include_router(granja_router)
 app.include_router(compare_router)
+app.include_router(muestras_router)
+app.include_router(idle_router)
 from app.privado import router as privado_router  # noqa: E402
 app.include_router(privado_router)
 from app.catalogo import router as catalogo_router  # noqa: E402
@@ -116,6 +123,9 @@ async def index():
 @app.middleware("http")
 async def _fresh_static(request, call_next):
     """Los archivos de la web se revalidan siempre (si no cambiaron, el navegador usa su copia sin bajarla)."""
+    if request.method in ("POST", "PUT", "DELETE") and request.url.path.startswith("/api/"):
+        from app import inactividad
+        inactividad.touch()          # una persona hizo algo: no es momento de entrenar solo
     resp = await call_next(request)
     if request.url.path.startswith("/static/"):
         resp.headers["Cache-Control"] = "no-cache"

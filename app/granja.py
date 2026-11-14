@@ -185,6 +185,7 @@ async def _follow_remote(subject_id: str, node: dict, jid: str, ctx: dict, steps
     async with _client(120) as c:
         try:
             spp, first, fails = lora_mod.sec_per_step(subject_id) or None, None, 0
+            last_samples = 0.0
             while True:
                 await asyncio.sleep(POLL)
                 with session() as s:
@@ -228,6 +229,9 @@ async def _follow_remote(subject_id: str, node: dict, jid: str, ctx: dict, steps
                                   "eta_min": round(spp * (steps - done) / 60) if spp else None})
                 elif st.get("phase"):
                     _update(subject_id, info={"phase": f"{node['label']}: {st['phase']}"})
+                if time.time() - last_samples > 30:          # 📸 trae las muestras nuevas (cada 100 pasos)
+                    last_samples = time.time()
+                    await _pull_samples(c, node, jid, subject_id, work / "output" / job)
                 if st.get("status") == "done":
                     break
                 if st.get("status") in ("failed", "canceled"):
@@ -241,6 +245,8 @@ async def _follow_remote(subject_id: str, node: dict, jid: str, ctx: dict, steps
             out_dir.mkdir(parents=True, exist_ok=True)
             final = out_dir / f"{job}.safetensors"
             final.write_bytes(res.content)
+            await _pull_samples(c, node, jid, subject_id, out_dir)
+            await _pull_checkpoints(c, node, jid, out_dir, job)
             finished = True
             hours = (time.time() - t0) / 3600
             _update(subject_id, info={"remote_job": None})
@@ -258,6 +264,45 @@ async def _follow_remote(subject_id: str, node: dict, jid: str, ctx: dict, steps
 
 class NodeUnavailable(RuntimeError):
     """El nodo no respondió al reservar lugar: el modelo vuelve a la fila (nada se tocó)."""
+
+
+async def _pull_samples(c, node: dict, jid: str, subject_id: str, out_dir: Path) -> None:
+    """📸 Copia a la placa las muestras nuevas que hizo la tarjeta y las numera. Si el nodo es viejo, no hace nada."""
+    from app import lora_muestras
+    try:
+        r = await c.get(f"{node['url']}/jobs/{jid}/files", params={"kind": "samples"}, headers=_headers(node))
+        if r.status_code != 200:
+            return
+        have = {x["src"] for x in lora_muestras.index(subject_id)}
+        sdir = out_dir / "samples"
+        for rel in r.json().get("files", []):
+            name = Path(rel).name
+            if name in have or (sdir / name).exists():
+                continue
+            g = await c.get(f"{node['url']}/jobs/{jid}/get", params={"path": rel}, headers=_headers(node))
+            if g.status_code == 200:
+                sdir.mkdir(parents=True, exist_ok=True)
+                (sdir / name).write_bytes(g.content)
+        await asyncio.to_thread(lora_muestras.collect, subject_id)
+    except Exception:  # noqa: BLE001
+        log.warning("No pude traer las muestras de %s", node.get("label"), exc_info=True)
+
+
+async def _pull_checkpoints(c, node: dict, jid: str, out_dir: Path, job: str) -> None:
+    """Trae los puntos guardados intermedios (los últimos), para poder elegir «la foto 42» aunque se entrenó afuera."""
+    try:
+        r = await c.get(f"{node['url']}/jobs/{jid}/files", params={"kind": "checkpoints"}, headers=_headers(node))
+        if r.status_code != 200:
+            return
+        for rel in r.json().get("files", []):
+            name = Path(rel).name
+            if name == f"{job}.safetensors" or (out_dir / name).exists():
+                continue
+            g = await c.get(f"{node['url']}/jobs/{jid}/get", params={"path": rel}, headers=_headers(node), timeout=600)
+            if g.status_code == 200:
+                (out_dir / name).write_bytes(g.content)
+    except Exception:  # noqa: BLE001
+        log.warning("No pude traer los puntos guardados de %s", node.get("label"), exc_info=True)
 
 
 async def _drop(node: dict, jid: str) -> None:

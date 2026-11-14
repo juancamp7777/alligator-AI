@@ -1011,8 +1011,50 @@ def find_subjects(names: list[str]) -> tuple[list[str], list[str]]:
     return found, missing
 
 
-async def run_campaign(campaign_id: str, subject_ids: list[str] | None = None, engine: str | None = None) -> None:
-    """Planifica N ideas (en tandas de 25 para variedad) y las pone todas en la cola."""
+_planner_temp: set[str] = set()      # campañas que encendieron el Planificador solo para ellas
+
+
+async def run_campaign(campaign_id: str, subject_ids: list[str] | None = None, engine: str | None = None,
+                       planner_temp: bool = False) -> None:
+    """Planifica N ideas (en tandas de 25 para variedad) y las pone todas en la cola.
+    planner_temp: el Planificador se encendió solo para esta campaña; se vuelve a apagar al terminar de planificar."""
+    if planner_temp:
+        _planner_temp.add(campaign_id)
+    try:
+        await _run_campaign(campaign_id, subject_ids, engine)
+    finally:
+        if campaign_id in _planner_temp:
+            _planner_temp.discard(campaign_id)
+            if not _planner_temp:                    # nadie más lo está usando: se apaga como estaba
+                from app.agents import registry
+                try:
+                    registry.save("planner", enabled=False)
+                    events.publish({"type": "campaign", "id": campaign_id,
+                                    "text": "Planificador apagado de nuevo (terminó su tarea)"})
+                except Exception:  # noqa: BLE001
+                    log.exception("No pude volver a apagar el Planificador")
+
+
+def campaign_posts(campaign_id: str) -> int:
+    with session() as s:
+        return s.query(Post).filter(Post.campaign_id == campaign_id).count()
+
+
+async def campaign_first_result(campaign_id: str, wait: float = 45.0) -> dict:
+    """Espera hasta que la campaña tenga sus primeros posts en cola o falle (máx. `wait` s). Así Shelton no dice
+    «ya están en la galería» si en realidad falló."""
+    t0 = asyncio.get_event_loop().time()
+    while True:
+        with session() as s:
+            c = s.get(Campaign, campaign_id)
+            status, error = (c.status, c.error or "") if c else ("failed", "La campaña no existe")
+        n = campaign_posts(campaign_id)
+        if status == "failed" or n or status != "planning" or asyncio.get_event_loop().time() - t0 >= wait:
+            return {"status": status, "error": error, "posts": n}
+        await asyncio.sleep(1.0)
+
+
+async def _run_campaign(campaign_id: str, subject_ids: list[str] | None = None, engine: str | None = None) -> None:
     with session() as s:
         c = s.get(Campaign, campaign_id)
         brand = get_or_create_brand(s)
@@ -1044,7 +1086,7 @@ async def run_campaign(campaign_id: str, subject_ids: list[str] | None = None, e
 
 
 def new_campaign(brief: str, count: int, platforms: list[str] | None = None, subject_ids=None,
-                 engine: str | None = None) -> str:
+                 engine: str | None = None, planner_temp: bool = False) -> str:
     with session() as s:
         brand = get_or_create_brand(s)
         plats = [get_platform(p).key for p in (platforms or brand.platforms or ["instagram_feed"])]
@@ -1052,7 +1094,7 @@ def new_campaign(brief: str, count: int, platforms: list[str] | None = None, sub
         s.add(c)
         s.flush()
         cid = c.id
-    asyncio.create_task(run_campaign(cid, subject_ids, engine))
+    asyncio.create_task(run_campaign(cid, subject_ids, engine, planner_temp))
     return cid
 
 

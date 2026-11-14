@@ -193,7 +193,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if not self._auth():
             return
-        parts, _ = self._parts()
+        parts, q = self._parts()
         if parts == ["health"]:
             busy = _busy_slots()
             return self._send(200, {"ok": True, "version": VERSION, "gpus": _gpu_info(), "slots": len(SLOTS),
@@ -203,6 +203,20 @@ class Handler(BaseHTTPRequestHandler):
         if len(parts) == 2 and parts[0] == "jobs" and parts[1] in _jobs:
             j = _jobs[parts[1]]
             return self._send(200, {k: j.get(k) for k in ("status", "phase", "step", "total", "tail", "error", "name")})
+        if len(parts) == 3 and parts[0] == "jobs" and parts[2] == "files" and parts[1] in _jobs:
+            # 📸 muestras del entrenamiento (cada 100 pasos) y puntos guardados, para que Shelton los traiga
+            kind = (q.get("kind") or ["samples"])[0]
+            d = JOBS / parts[1] / "output"
+            pats = ("*/samples/*",) if kind == "samples" else ("*/*.safetensors",)
+            files = sorted({str(f.relative_to(d)) for pat in pats for f in (d.glob(pat) if d.exists() else []) if f.is_file()})
+            return self._send(200, {"files": files})
+        if len(parts) == 3 and parts[0] == "jobs" and parts[2] == "get" and parts[1] in _jobs:
+            rel = (q.get("path") or [""])[0]
+            d = (JOBS / parts[1] / "output").resolve()
+            f = (d / rel).resolve() if SAFE.match(rel) and ".." not in rel else None
+            if not f or d not in f.parents or not f.is_file():
+                return self._send(404, {"error": "No existe"})
+            return self._send(200, raw=f.read_bytes())
         if len(parts) == 3 and parts[0] == "jobs" and parts[2] == "result" and parts[1] in _jobs:
             f = _result_file(parts[1])
             if not f:

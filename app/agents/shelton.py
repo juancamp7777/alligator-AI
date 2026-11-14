@@ -41,6 +41,13 @@ Cómo trabajas:
 - Si el pedido es claro, actúa enseguida. Si falta algo esencial (por ejemplo, de qué trata la marca para una
   campaña grande), pregunta una sola vez y propone opciones.
 - Hasta ~6 posts: create_posts. Más que eso o "N diarios": create_campaign (se procesan en cola).
+- Las campañas necesitan al Planificador. Si create_campaign responde que está apagado, NO digas que las fotos se
+  están haciendo: dile al usuario que no pudiste porque el Planificador está apagado y pregúntale si lo enciendes
+  solo para esta tarea. Si dice que sí, llama otra vez a create_campaign con turn_on_planner=true: se enciende,
+  planifica y se vuelve a apagar solo apenas termina de planificar.
+- Nunca afirmes que algo está en la galería, en cola o generándose si la herramienta no lo confirmó. Si una
+  herramienta devuelve un error o un estado "failed", dilo tal cual y propone la solución. Ante la duda, revisa
+  con studio_status antes de responder.
 - Cada idea que envíes debe ser una escena concreta y visual, con el estilo pedido (foto, óleo, anime, 3D...).
 - Videos y reels, en cadena y con una sola orden: para un reel de varias escenas usa create_reel (imagen -> juez ->
   video -> juez -> montaje -> texto). Para clips sueltos usa create_posts con format="video". Para animar posts que ya
@@ -142,7 +149,10 @@ TOOLS = [
           {"brief": {"type": "string", "description": "Objetivo, temas, tono, estilos, fechas, ofertas..."},
            "count": {"type": "integer", "minimum": 1, "maximum": 200},
            "platforms": {"type": "array", "items": {"type": "string", "enum": PLATFORM_KEYS}},
-           "subjects": {"type": "array", "items": {"type": "string"}}, **_MODEL_PICK}, ["brief", "count"]),
+           "subjects": {"type": "array", "items": {"type": "string"}},
+           "turn_on_planner": {"type": "boolean", "description": "Solo true si el usuario ya aceptó encender el "
+                               "Planificador para esta campaña (se apaga solo al terminar de planificar)."},
+           **_MODEL_PICK}, ["brief", "count"]),
     _tool("edit_post", "Edita un post existente: cambiar algo de la imagen (fondo, ropa, luz, color, estilo, añadir/quitar "
           "objetos, texto en la imagen) o solo reescribir su texto. Crea una versión nueva y espera el resultado.",
           {"post_id": {"type": "string"}, "instruction": {"type": "string"},
@@ -225,6 +235,15 @@ TOOLS = [
            "platforms": {"type": "array", "items": {"type": "string", "enum": PLATFORM_KEYS}},
            "autopilot_daily": {"type": "integer", "minimum": 0, "maximum": 200},
            "autopilot_hour": {"type": "integer", "minimum": 0, "maximum": 23}}, []),
+    _tool("training_samples", "📸 Fotos de muestra del entrenamiento de la LoRA de un modelo del banco: una cada 100 "
+          "pasos, numeradas («Valentina #0042 · paso 20.700»). Úsalo cuando el usuario pregunte por las fotos del "
+          "entrenamiento o nombre una foto por su número.",
+          {"subject": {"type": "string", "description": "Nombre del modelo del banco"},
+           "limit": {"type": "integer", "minimum": 1, "maximum": 40}}, ["subject"]),
+    _tool("use_training_sample", "Deja activa la LoRA EXACTA de una foto de muestra (por su número): desde ahí el "
+          "modelo sale siempre así y el entrenamiento sigue desde ese punto. Úsalo cuando el usuario diga «usa la foto "
+          "42 de Valentina» o «quiero que salga siempre como en la 42».",
+          {"subject": {"type": "string"}, "number": {"type": "integer", "minimum": 1}}, ["subject", "number"]),
     _tool("studio_status", "Estado de la cola, posts listos hoy y campañas en curso.", {}, []),
     _tool("studio_capacity", "Con qué cuentas AHORA: trabajadores en paralelo, GPUs y nube, cola, cuánto tarda cada "
           "cosa (medido) y en cuánto se libera. Úsalo para planear varios pedidos a la vez y dar tiempos realistas.", {}, []),
@@ -352,6 +371,26 @@ async def _announce(emit, role: str, engine: str | None = None) -> None:
     await emit({"type": "mode_tag", "text": label})
 
 
+def agent_off_in(text: str) -> str | None:
+    """Si un resultado dice que un subagente está apagado («El Planificador está apagado…»), cuál es."""
+    low = (text or "").lower()
+    if "apagad" not in low:
+        return None
+    for key, a in registry.AGENTS.items():
+        if key != "shelton" and f"{a['name'].lower()} está apagad" in low and not registry.is_on(key):
+            return key
+    return None
+
+
+async def _need_agent(text: str, emit) -> None:
+    """Banner en el chat: «No te puedo hacer esto porque falta encender X», con botón Encender."""
+    key = agent_off_in(text)
+    if key:
+        a = registry.AGENTS[key]
+        await emit({"type": "need_agent", "key": key, "name": a["name"], "color": a.get("color", "#f59e0b"),
+                    "role": a.get("role", "")})
+
+
 async def _run_tool(name: str, args: dict, ctx: dict, emit) -> list | str:
     conv_id, engine = ctx["conv_id"], ctx["engine"] or None
     if name in ("create_posts", "create_campaign", "create_reel", "make_video", "recreate_reference") and (
@@ -380,11 +419,31 @@ async def _run_tool(name: str, args: dict, ctx: dict, emit) -> list | str:
         return await _wait_and_report(ids, emit, f"Equipo trabajando en {len(ids)} post(s)…")
 
     if name == "create_campaign":
+        temp = False
+        if not registry.is_on("planner"):
+            if not args.get("turn_on_planner"):
+                return json.dumps({"ok": False, "launched": False, "planner_off": True,
+                                   "message": "NO se lanzó la campaña: el Planificador está apagado. Díselo al usuario "
+                                              "y pregúntale si lo enciendes solo para esta tarea (se apaga solo al "
+                                              "terminar de planificar). Si acepta, vuelve a llamar con "
+                                              "turn_on_planner=true."}, ensure_ascii=False)
+            registry.save("planner", enabled=True)
+            temp = True
+            await emit({"type": "status", "text": "Encendí el Planificador para esta campaña (se apaga solo al terminar)"})
         sids, missing = pipeline.find_subjects(args.get("subjects", []))
-        cid = pipeline.new_campaign(args["brief"], args["count"], args.get("platforms"), sids, engine)
+        cid = pipeline.new_campaign(args["brief"], args["count"], args.get("platforms"), sids, engine,
+                                    planner_temp=temp)
         await emit({"type": "status", "text": f"Campaña de {args['count']} posts planificándose…"})
-        return json.dumps({"campaign_id": cid, "count": args["count"], "subjects_not_found": missing,
-                           "note": "Los posts se generan en cola y aparecen en la galería."}, ensure_ascii=False)
+        st = await pipeline.campaign_first_result(cid)
+        if st["status"] == "failed":
+            return json.dumps({"ok": False, "launched": False, "campaign_id": cid, "error": st["error"],
+                               "message": "La campaña FALLÓ: no hay fotos en la galería. Díselo al usuario con el motivo."},
+                              ensure_ascii=False)
+        return json.dumps({"ok": True, "campaign_id": cid, "count": args["count"], "queued_so_far": st["posts"],
+                           "subjects_not_found": missing, "planner_turned_on_temporarily": temp,
+                           "note": (f"Ya hay {st['posts']} en cola; el resto se sigue planificando. "
+                                    if st["posts"] else "Se está planificando. ") +
+                                   "Aparecen en la galería a medida que se terminan."}, ensure_ascii=False)
 
     if name == "edit_post":
         pid = pipeline.new_edit(args["post_id"], args["instruction"], bool(args.get("rewrite_caption")), conv_id, engine)
@@ -677,9 +736,33 @@ async def _run_tool(name: str, args: dict, ctx: dict, emit) -> list | str:
         events.publish({"type": "audio", "audio": a})
         return json.dumps(a, ensure_ascii=False)
 
+    if name in ("training_samples", "use_training_sample"):
+        from app import lora_muestras
+        sids, missing = pipeline.find_subjects([args["subject"]])
+        if not sids:
+            return f"No encontré a «{args['subject']}» en el banco."
+        sid = sids[0]
+        if name == "use_training_sample":
+            try:
+                r = lora_muestras.use(sid, int(args["number"]))
+            except ValueError as e:
+                return f"No se pudo: {e}"
+            return json.dumps({"ok": True, "now_active": r["label"],
+                               "note": "Desde ahora sale con esa versión y el próximo entrenamiento sigue desde ahí."},
+                              ensure_ascii=False)
+        d = lora_muestras.listing(sid, int(args.get("limit") or 12))
+        if not d["samples"]:
+            return (f"{d['name']} todavía no tiene fotos de muestra del entrenamiento (salen una cada "
+                    f"{d['every']} pasos mientras entrena).")
+        return json.dumps({"every_steps": d["every"], "pinned": d["pinned"],
+                           "samples": [{"number": x["n"], "step": x["step"], "label": x["label"]}
+                                       for x in d["samples"][:int(args.get("limit") or 12)]],
+                           "where": "Banco → su tarjeta → 📸 Muestras del entrenamiento"}, ensure_ascii=False)
+
     if name == "studio_status":
         with session() as s:
-            camps = [{"id": c.id, "brief": c.brief[:80], "count": c.count, "status": c.status}
+            camps = [{"id": c.id, "brief": c.brief[:80], "count": c.count, "status": c.status,
+                      "error": (c.error or "")[:200]}
                      for c in s.query(Campaign).order_by(Campaign.created_at.desc()).limit(5)]
         return json.dumps({"queue": pipeline.queue_stats(), "campaigns": camps}, ensure_ascii=False)
 
@@ -838,6 +921,8 @@ async def _turn(conv_id, user_text, upload_post_ids, emit, agent, engine, attach
             try:
                 out = await _run_tool(u.name, dict(u.input or {}), ctx, emit)
                 results.append({"type": "tool_result", "tool_use_id": u.id, "content": out})
+                if isinstance(out, str):
+                    await _need_agent(out, emit)
                 if u.name in ("create_posts", "edit_post", "make_video", "make_reel", "create_reel", "add_voice", "add_sound",
                               "recreate_reference", "use_audio"):
                     created_posts += [r["id"] for r in json.loads(out[0]["text"])]
@@ -846,6 +931,7 @@ async def _turn(conv_id, user_text, upload_post_ids, emit, agent, engine, attach
             except Exception as e:
                 log.warning("tool %s falló: %s", u.name, e)
                 results.append({"type": "tool_result", "tool_use_id": u.id, "content": f"Error: {e}", "is_error": True})
+                await _need_agent(str(e), emit)
         messages.append({"role": "user", "content": results})
 
     display.append({"role": "assistant", "text": final_text, "post_ids": created_posts})

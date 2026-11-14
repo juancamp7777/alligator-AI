@@ -109,3 +109,64 @@ def test_turn_on_all_savers(monkeypatch):
     for k in consumo.SIMPLE_AGENTS:                       # se puede deshacer uno por uno
         consumo.aplicar(f"model_restore:{k}")
     assert registry.model("copywriter") != consumo.CHEAP_MODEL
+
+
+def test_campaign_with_planner_off_does_not_lie_and_turns_it_on_and_off(monkeypatch):
+    """Planificador apagado: Shelton NO dice que las fotos están en la galería; con permiso lo enciende,
+    planifica, y lo vuelve a apagar apenas termina."""
+    import json
+    from app.agents import shelton
+    init_db()
+    _off("planner")
+    try:
+        async def fake_plan(brief, count, platforms, brand, already=None, subjects=None):
+            assert registry.is_on("planner")                    # encendido mientras planifica
+            return [{"idea": f"idea {len(already or []) + i}", "platform": platforms[0]} for i in range(count)]
+        monkeypatch.setattr(sp, "plan_ideas", fake_plan)
+        monkeypatch.setattr(pipeline, "new_post", lambda idea, plat, **k: _fake_post(k["campaign_id"]))
+        ctx = {"conv_id": None, "engine": None}
+
+        async def emit(ev):
+            pass
+
+        async def go(args):
+            out = await shelton._run_tool("create_campaign", args, ctx, emit)
+            for _ in range(50):
+                await asyncio.sleep(0.02)
+            return json.loads(out)
+        r = asyncio.run(go({"brief": "semana", "count": 3}))
+        assert r["planner_off"] and not r["launched"] and not registry.is_on("planner")
+        r = asyncio.run(go({"brief": "semana", "count": 3, "turn_on_planner": True}))
+        assert r["ok"] and r["planner_turned_on_temporarily"]
+        assert not registry.is_on("planner")                    # se apagó solo al terminar
+    finally:
+        _on("planner")
+        with session() as s:
+            for p in s.query(Post).filter(Post.idea == "x", Post.campaign_id.isnot(None)):
+                s.delete(p)
+
+
+def _fake_post(campaign_id):
+    with session() as s:
+        p = Post(idea="x", platform="instagram_feed", campaign_id=campaign_id, status="queued")
+        s.add(p)
+        s.flush()
+        return p.id
+
+
+def test_banner_when_a_needed_agent_is_off():
+    """Si un resultado dice que un subagente está apagado, el chat muestra el banner para encenderlo."""
+    from app.agents import shelton
+    _off("planner")
+    try:
+        assert shelton.agent_off_in("NO se lanzó la campaña: el Planificador está apagado.") == "planner"
+        assert shelton.agent_off_in("Todo bien, 3 posts listos") is None
+        evs = []
+
+        async def emit(ev):
+            evs.append(ev)
+        asyncio.run(shelton._need_agent("El Planificador está apagado: enciéndelo en Agentes", emit))
+        assert evs and evs[0]["type"] == "need_agent" and evs[0]["key"] == "planner"
+    finally:
+        _on("planner")
+    assert shelton.agent_off_in("El Planificador está apagado") is None      # ya encendido: no molesta

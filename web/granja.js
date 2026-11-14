@@ -95,3 +95,34 @@ document.addEventListener("click", async (e) => {
   } catch (err) { toast(esc(err.message), "bad"); }
   setTimeout(() => { if (VIEWS.granja && location.hash.includes("granja")) route(); }, 1500);
 });
+
+
+// ------------------------------------------------------------------ 🌙 Entrenar sola cuando no hay nadie
+async function renderIdle() {
+  const box = document.getElementById("gj-idle");
+  if (!box || box.dataset.busy) return;
+  let d;
+  try { d = await api("/api/inactividad"); } catch { return; }
+  box.innerHTML = `<div class="row" style="gap:8px;flex-wrap:wrap"><b>🌙 Entrenar sola cuando no hay nadie</b>
+      <label class="row" style="gap:6px"><input type="checkbox" id="idle-on" ${d.on ? "checked" : ""}> Encendido</label>
+      <span class="faint small">después de</span>
+      <select id="idle-h">${[1, 2, 3, 4, 6, 8].map((h) => `<option value="${h}" ${+d.hours === h ? "selected" : ""}>${h} h</option>`).join("")}</select>
+      <span class="faint small">sin uso, · pasos por sesión</span>
+      <select id="idle-s">${[500, 1000, 2000, 3000].map((n) => `<option value="${n}" ${+d.steps === n ? "selected" : ""}>${n}</option>`).join("")}</select></div>
+    <div class="faint small" style="margin-top:6px">Si nadie usa Shelton (ni clics, ni pedidos, ni fotos en cola, ni Shelton Hot), pone a entrenar a las modelos de a una,
+      sumando sobre lo que ya saben (primero las que tienen fotos nuevas). Nunca empieza una de cero.
+      ${d.last_name ? `<br>Último entrenamiento automático: <b>${esc(d.last_name)}</b> (${esc(d.last_at.replace("T", " "))}).` : ""}
+      ${d.on ? `<br>Ahora: ${d.busy ? esc(d.busy) : `sin uso hace ${d.idle_min} min`}.` : ""}</div>`;
+  const put = async () => { box.dataset.busy = "1"; try { await api("/api/inactividad", { method: "PUT", body: { on: $("#idle-on", box).checked, hours: +$("#idle-h", box).value, steps: +$("#idle-s", box).value } }); toast("Guardado", "good", "🌙"); } catch (e) { toast(esc(e.message), "bad"); } delete box.dataset.busy; renderIdle(); };
+  ["#idle-on", "#idle-h", "#idle-s"].forEach((q) => $(q, box).onchange = put);
+}
+const _granjaIdle = VIEWS.granja;
+VIEWS.granja = async (el) => {
+  await _granjaIdle(el);
+  const body = document.getElementById("gj-body");
+  if (body && !document.getElementById("gj-idle")) {
+    const box = document.createElement("div"); box.className = "card"; box.id = "gj-idle"; box.style.marginTop = "16px";
+    body.after(box);
+  }
+  renderIdle();
+};

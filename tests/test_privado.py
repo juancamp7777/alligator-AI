@@ -464,3 +464,28 @@ def test_choosing_the_model_in_the_form_uses_her_adult_lora_and_her_face(monkeyp
         return r
     asyncio.run(go())
     assert got["loras"][0][0] == "abril_adulta.safetensors" and got["face"]["lora"] == "abril.safetensors"
+
+
+def test_shelton_hot_is_fast_cached_registry_thumbnails_and_checkpoints(monkeypatch):
+    """Shelton Hot rápido: el registro se relee solo si cambió, la grilla usa miniaturas y la lista de checkpoints
+    no consulta a ComfyUI en cada clic."""
+    import asyncio
+    privado._append({"id": "fast-0", "batch": "fast", "at": "2099-01-01", "status": "done", "file": "fast-0.png"})
+    (settings.DATA_DIR / "privado" / "fast-0.png").write_bytes(_png("red"))
+    assert any(e["id"] == "fast-0" for e in privado.entries())
+    privado._append({"id": "fast-0", "review": "approved"})
+    assert next(e for e in privado.entries() if e["id"] == "fast-0")["review"] == "approved"   # ve el cambio
+    t = privado.thumb("fast-0.png")
+    assert t and t.suffix == ".jpg" and t.parent.name == "miniaturas"
+    calls = []
+
+    class FakeClient:
+        async def object_info(self, node):
+            calls.append(node)
+            return {"CheckpointLoaderSimple": {"input": {"required": {"ckpt_name": [["a.safetensors", "flux1.safetensors"]]}}}}
+    monkeypatch.setattr("app.comfyui.client.ComfyUIClient", FakeClient)
+    privado._ckpt_cache.update(t=0.0, list=[])
+    assert asyncio.run(privado.checkpoints()) == ["a.safetensors"]
+    assert asyncio.run(privado.checkpoints()) == ["a.safetensors"] and len(calls) == 1      # guardada
+    privado.delete("fast-0")
+    assert not t.exists()

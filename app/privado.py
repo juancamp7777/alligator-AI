@@ -231,9 +231,23 @@ def _append(entry: dict) -> None:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 
+_entries_cache: dict = {"key": None, "rows": []}
+
+
 def entries() -> list[dict]:
-    if not _registry().exists():
+    """Imágenes de Shelton Hot (la más nueva primero). Se relee el registro solo si cambió (más rápido)."""
+    f = _registry()
+    if not f.exists():
         return []
+    st = f.stat()
+    key = (str(f), st.st_mtime_ns, st.st_size)
+    if _entries_cache["key"] != key:
+        _entries_cache["rows"] = _read_entries()
+        _entries_cache["key"] = key
+    return [dict(e) for e in _entries_cache["rows"]]
+
+
+def _read_entries() -> list[dict]:
     rows: dict[str, dict] = {}
     for line in _registry().read_text(encoding="utf-8").splitlines():
         try:
@@ -598,19 +612,31 @@ def delete(entry_id: str) -> None:
         _cancelled.add(entry_id)                                # si estaba esperando, se cancela
     if e.get("file"):
         (_dir() / Path(e["file"]).name).unlink(missing_ok=True)
+        (_dir() / "miniaturas" / (Path(e["file"]).stem + ".jpg")).unlink(missing_ok=True)
     _append({"id": entry_id, "deleted": True, "at": datetime.now().isoformat(timespec="seconds")})
 
 
+_ckpt_cache: dict = {"t": 0.0, "list": []}
+CKPT_TTL = 300.0
+
+
 async def checkpoints() -> list[str]:
-    """Checkpoints instalados en el ComfyUI de la placa (para elegir Pony, CyberRealistic…)."""
+    """Checkpoints instalados en el ComfyUI de la placa (para elegir Pony, CyberRealistic…). Se guardan 5 min: abrir
+    Shelton Hot no espera a ComfyUI cada vez (sobre todo si la placa está entrenando)."""
+    import time as _t
     from app.comfyui.client import ComfyUIClient
+    ttl = CKPT_TTL if _ckpt_cache["list"] else 30.0
+    if _t.time() - _ckpt_cache["t"] < ttl:
+        return list(_ckpt_cache["list"])
     try:
-        info = await ComfyUIClient().object_info("CheckpointLoaderSimple")
+        info = await asyncio.wait_for(ComfyUIClient().object_info("CheckpointLoaderSimple"), 8)
         req = info["CheckpointLoaderSimple"]["input"]["required"]["ckpt_name"]
         opts = req[0] if isinstance(req[0], list) else (req[1] or {}).get("options", [])
-        return sorted(o for o in opts if "flux" not in o.lower())   # la lista es de SDXL: Flux va aparte
+        out = sorted(o for o in opts if "flux" not in o.lower())   # la lista es de SDXL: Flux va aparte
     except Exception:  # noqa: BLE001
-        return []
+        out = list(_ckpt_cache["list"])         # si ComfyUI tarda, uso la última lista conocida
+    _ckpt_cache.update(t=_t.time(), list=out)
+    return list(out)
 
 
 # ------------------------------------------------------------------ API (todo exige administrador)
@@ -716,13 +742,38 @@ async def api_generate(body: GenIn, request: Request):
         raise HTTPException(400, str(e))
 
 
+def thumb(file: str) -> Path | None:
+    """Miniatura JPEG (512 px) de una imagen privada, guardada junto a las privadas (nunca en /media)."""
+    src = _dir() / Path(file).name
+    if not src.exists():
+        return None
+    tdir = _dir() / "miniaturas"
+    out = tdir / (src.stem + ".jpg")
+    if out.exists() and out.stat().st_mtime >= src.stat().st_mtime:
+        return out
+    try:
+        from PIL import Image
+        tdir.mkdir(exist_ok=True)
+        with Image.open(src) as im:
+            im = im.convert("RGB")
+            im.thumbnail((512, 512))
+            im.save(out, "JPEG", quality=82)
+        return out
+    except Exception:  # noqa: BLE001
+        return None
+
+
 @router.get("/imagen/{entry_id}")
-async def api_image(entry_id: str, request: Request):
+async def api_image(entry_id: str, request: Request, t: int = 0):
     _admin(request)
     e = next((x for x in entries() if x["id"] == entry_id and x.get("file")), None)
     if not e:
         raise HTTPException(404, "No existe")
-    return FileResponse(_dir() / Path(e["file"]).name, headers={"Cache-Control": "private, no-store"})
+    if t:
+        small = await asyncio.to_thread(thumb, e["file"])
+        if small:
+            return FileResponse(small, headers={"Cache-Control": "private, max-age=86400"})
+    return FileResponse(_dir() / Path(e["file"]).name, headers={"Cache-Control": "private, max-age=86400"})
 
 
 class ReviewIn(BaseModel):

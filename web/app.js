@@ -418,6 +418,39 @@ function thumbs(ids) {
   ids.forEach(async (id) => { let p = S.posts.get(id); if (!p) { try { p = await api(`/api/posts/${id}`); S.posts.set(id, p); } catch { return; } } if (!$(`.tile[data-id="${id}"]`, box)) box.append(tile(p)); });
   return box;
 }
+// 🌙 Avisa que hay una persona usando Shelton (para no ponerse a entrenar solo mientras trabajas). 1 vez por minuto.
+(() => {
+  let last = 0;
+  const ping = () => { const t = Date.now(); if (t - last < 60000) return; last = t; fetch("/api/actividad", { method: "POST" }).catch(() => {}); };
+  ["mousemove", "keydown", "click", "touchstart", "scroll"].forEach((e) => window.addEventListener(e, ping, { passive: true }));
+})();
+
+// Banner de color: «No te puedo hacer esto porque falta encender X» + botón para encenderlo y reintentar
+function needAgentBanner(ev) {
+  const d = document.createElement("div");
+  d.className = "need-agent"; d.dataset.needag = ev.key;
+  d.style.cssText = `border:1px solid ${ev.color};background:${ev.color}22;border-radius:12px;padding:10px 14px;margin:8px 0;display:flex;gap:10px;align-items:center;flex-wrap:wrap`;
+  d.innerHTML = `<span style="font-size:20px">⚠️</span><div class="grow"><b>No te puedo hacer esto porque falta encender: ${esc(ev.name)}</b>
+    <div class="faint small">${esc(ev.role || "")}</div></div>
+    <button class="btn sm primary">Encender y seguir</button><button class="btn sm ghost">Ahora no</button>`;
+  const [on, no] = $$("button", d);
+  on.onclick = async () => {
+    on.disabled = true;
+    const input = $("#input");
+    if (ev.key === "planner") {      // el Planificador se enciende solo para esta campaña y se apaga al terminar
+      d.innerHTML = `<span>✅</span><b>Enciendo el Planificador solo para esta campaña</b> <span class="faint small">(se apaga solo al terminar)</span>`;
+      if (input && !S.busy) { input.value = "Sí, enciende el Planificador solo para esta campaña y lánzala."; sendMessage(); }
+      return;
+    }
+    try { await api(`/api/agents/${ev.key}`, { method: "PUT", body: { enabled: true } }); }
+    catch (e) { on.disabled = false; return toast(esc(e.message), "bad"); }
+    d.innerHTML = `<span>✅</span><b>${esc(ev.name)} encendido.</b> <span class="faint small">Sigo con tu pedido…</span>`;
+    if (input && !S.busy) { input.value = `Listo, ya encendí el ${ev.name}. Sigue con lo que te pedí.`; sendMessage(); }
+  };
+  no.onclick = () => d.remove();
+  return d;
+}
+
 async function sendMessage() {
   const input = $("#input"), text = input.value.trim();
   if (!text || S.busy) return;
@@ -451,6 +484,7 @@ async function sendMessage() {
         else if (ev.type === "subjects_changed") step("Banco de modelos actualizado");
         else if (ev.type === "message") { const b = document.createElement("div"); b.className = "bubble"; b.textContent = ev.text || "(sin respuesta)"; body.insertBefore(b, steps.nextSibling); const rest = ev.post_ids.filter((x) => !shown.has(x)); if (rest.length) body.append(thumbs(rest)); }
         else if (ev.type === "error") { const b = document.createElement("div"); b.className = "bubble"; b.style.borderColor = "var(--bad)"; b.textContent = "⚠ " + ev.text; body.append(b); }
+        else if (ev.type === "need_agent" && !$(`[data-needag="${ev.key}"]`, body)) body.append(needAgentBanner(ev));
       }
     }
   } catch (err) { step("⚠ " + err.message); }

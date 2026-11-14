@@ -80,7 +80,39 @@ VIEWS.banco = async (el) => {
     b.onclick = () => compareDialog(sid, s.name);
     ($(".lora-box", card) || $(".body", card))?.append(b);
   });
+  // 📸 Muestras del entrenamiento: una foto numerada cada 100 pasos
+  $$(".subject-card").forEach((card) => {
+    const sid = $("[data-del]", card)?.dataset.del, s = byId[sid];
+    const L = s?.lora || {};
+    if (!s || !(L.trigger || L.status === "training" || L.status === "queued") || $("[data-lsmp]", card)) return;
+    const b = document.createElement("button");
+    b.className = "btn sm ghost"; b.dataset.lsmp = sid; b.textContent = "📸 Muestras del entrenamiento";
+    b.title = "Una foto de prueba cada 100 pasos, numerada. Elige la que te guste y queda esa versión";
+    b.onclick = () => samplesDialog(sid, s.name);
+    ($(".lora-box", card) || $(".body", card))?.append(b);
+  });
 };
+
+async function samplesDialog(sid, name) {
+  let d;
+  try { d = await api(`/api/subjects/${sid}/lora/muestras`); } catch (e) { return toast(esc(e.message), "bad"); }
+  const box = modal(`📸 Muestras del entrenamiento · ${esc(name)}`, `
+    <div class="hint">Mientras entrena, sale <b>una foto cada ${d.every || 100} pasos</b> y sigue entrenando. Cada una tiene su <b>número</b>.
+      Si una te gusta, toca <b>⭐ Usar esta</b> (o dile a Shelton «usa la foto 42 de ${esc(name)}»): queda activa esa versión exacta y el próximo entrenamiento sigue desde ahí.</div>
+    <div class="smp-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-top:10px">
+      ${d.samples.map((x) => `<div class="card" style="padding:6px">
+        <img src="${esc(x.url)}" loading="lazy" style="width:100%;border-radius:8px;cursor:zoom-in" data-zoom="${esc(x.url)}">
+        <div class="row" style="gap:6px;margin-top:4px"><b>#${String(x.n).padStart(4, "0")}</b><span class="faint small grow">paso ${x.step.toLocaleString("es")}</span></div>
+        ${d.pinned === x.n ? '<span class="chip good">⭐ En uso</span>' : `<button class="btn sm" data-smpuse="${x.n}">⭐ Usar esta</button>`}
+      </div>`).join("") || '<div class="faint small">Todavía no hay muestras. Aparecen solas mientras entrena (una cada 100 pasos).</div>'}
+    </div>`, `<button class="btn ghost" onclick="closeModal()">Cerrar</button>`, true);
+  $$("[data-zoom]", box).forEach((im) => im.onclick = () => window.open(im.dataset.zoom, "_blank"));
+  $$("[data-smpuse]", box).forEach((b) => b.onclick = async () => {
+    b.disabled = true;
+    try { const r = await api(`/api/subjects/${sid}/lora/muestras/${b.dataset.smpuse}/usar`, { method: "POST" }); toast(`Listo: ${esc(r.label)} es la versión activa`, "good", "⭐"); samplesDialog(sid, name); }
+    catch (e) { toast(esc(e.message), "bad"); b.disabled = false; }
+  });
+}
 
 async function renderTrainingNow(box) {
   let list = [];
